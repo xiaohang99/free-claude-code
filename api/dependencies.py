@@ -1,6 +1,6 @@
 """Dependency injection for FastAPI."""
 
-from fastapi import HTTPException
+from fastapi import Depends, HTTPException, Request
 from loguru import logger
 
 from config.settings import Settings
@@ -112,3 +112,41 @@ async def cleanup_provider():
         await provider.cleanup()
     _providers = {}
     logger.debug("Provider cleanup completed")
+
+
+async def verify_auth_token(request: Request, settings: Settings = Depends(get_settings)) -> None:
+    """Verify ANTHROPIC_AUTH_TOKEN from request headers if configured.
+
+    - If settings.anthropic_auth_token is empty, authentication is disabled (backward compatible)
+    - If configured, clients must provide matching ANTHROPIC_AUTH_TOKEN header
+    """
+    if not settings.anthropic_auth_token:
+        # Auth not configured, allow all requests
+        return
+
+    # Get token from headers (FastAPI converts header names to lowercase)
+    auth_header = request.headers.get("anthropic-auth-token")
+
+    if not auth_header:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Missing ANTHROPIC_AUTH_TOKEN header"
+                }
+            }
+        )
+
+    if auth_header != settings.anthropic_auth_token:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "type": "error",
+                "error": {
+                    "type": "authentication_error",
+                    "message": "Invalid ANTHROPIC_AUTH_TOKEN"
+                }
+            }
+        )
