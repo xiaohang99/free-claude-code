@@ -124,10 +124,38 @@ async def verify_auth_token(request: Request, settings: Settings = Depends(get_s
         # Auth not configured, allow all requests
         return
 
-    # Get token from headers (FastAPI converts header names to lowercase)
+    # Get token from headers - support both anthropic-auth-token and authorization (Bearer) formats
     auth_header = request.headers.get("anthropic-auth-token")
+    auth_bearer = request.headers.get("authorization")
 
-    if not auth_header:
+    # Extract token from Bearer format if present
+    token_from_bearer = None
+    if auth_bearer and auth_bearer.lower().startswith("bearer "):
+        token_from_bearer = auth_bearer[7:]  # Remove "Bearer " prefix
+
+    # Use the token from either header
+    received_token = auth_header or token_from_bearer
+
+    # Debug logging: show configured token and received token (masked for security)
+    configured_token_masked = settings.anthropic_auth_token[:4] + "..." + settings.anthropic_auth_token[-4:] if len(settings.anthropic_auth_token) > 8 else "***"
+    received_masked = "<missing>"
+    if received_token:
+        received_masked = received_token[:4] + "..." + received_token[-4:] if len(received_token) > 8 else "***"
+
+    logger.debug(
+        "Auth check - Configured token: {}, Received token: {}, Source header: {}",
+        configured_token_masked,
+        received_masked,
+        "anthropic-auth-token" if auth_header else ("authorization" if token_from_bearer else "none")
+    )
+
+    if not received_token:
+        # Dump all request headers for debugging
+        logger.warning("Missing ANTHROPIC_AUTH_TOKEN. Expected: {}", configured_token_masked)
+        logger.warning("=== FULL REQUEST HEADERS DUMP ===")
+        for header_name, header_value in request.headers.items():
+            logger.warning("Header: {} = {}", header_name, header_value)
+        logger.warning("=== END HEADERS DUMP ===")
         raise HTTPException(
             status_code=401,
             detail={
@@ -139,7 +167,17 @@ async def verify_auth_token(request: Request, settings: Settings = Depends(get_s
             }
         )
 
-    if auth_header != settings.anthropic_auth_token:
+    if received_token != settings.anthropic_auth_token:
+        logger.warning(
+            "ANTHROPIC_AUTH_TOKEN mismatch. Expected: {}, Got: {}",
+            configured_token_masked,
+            received_masked
+        )
+        # Dump all request headers for debugging
+        logger.warning("=== FULL REQUEST HEADERS DUMP ===")
+        for header_name, header_value in request.headers.items():
+            logger.warning("Header: {} = {}", header_name, header_value)
+        logger.warning("=== END HEADERS DUMP ===")
         raise HTTPException(
             status_code=401,
             detail={
@@ -150,3 +188,5 @@ async def verify_auth_token(request: Request, settings: Settings = Depends(get_s
                 }
             }
         )
+
+    logger.debug("ANTHROPIC_AUTH_TOKEN authentication successful")
